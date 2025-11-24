@@ -1,0 +1,15 @@
+twikit
+pandas
+python-dotenv
+undetected-chromedriver
+selenium
+feedparser
+pytrends
+scikit-learn
+kiwipiepy
+gensim
+sentence-transformers
+google-generativeai
+bertopic 
+umap-learn 
+hdbscan

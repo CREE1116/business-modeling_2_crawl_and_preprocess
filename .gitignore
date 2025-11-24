@@ -1,0 +1,7 @@
+/.DS_Store
+/.env
+/.venv
+/__pycache__
+/data
+/twitter_cookies.pkl
+/twitter_retweet_filtered_20251124_1827.csv
