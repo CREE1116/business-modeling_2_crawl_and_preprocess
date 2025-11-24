@@ -10,12 +10,20 @@ import random
 import os
 import re
 from datetime import datetime
+import json
+from dotenv import load_dotenv
+
+# 환경변수 로드
+load_dotenv()
 
 # ==========================================
 # [설정] API 키 및 파라미터
 # ==========================================
-# 구글 AI Studio(https://aistudio.google.com/)에서 발급받은 키를 입력하세요
-GEMINI_API_KEY = "" 
+# .env 파일에서 API 키 읽기
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    raise ValueError("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요!") 
 
 # 수집할 페이지 수 (DC인사이드)
 DC_PAGES = 2

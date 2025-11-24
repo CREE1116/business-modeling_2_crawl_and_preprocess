@@ -91,6 +91,17 @@ TWEETS_PER_QUERY_GROUP = 300  # 키워드당 수집 목표
 - 최소 리트윗 수 필터링 (품질 관리)
 - 30개 노이즈 키워드 제외 (아이돌, 스포츠, 도박 등)
 
+**첫 실행 시 로그인**:
+
+```
+처음 실행하면 Chrome 브라우저가 열리고 Twitter 로그인 화면이 나타납니다.
+1. 수동으로 Twitter 로그인
+2. 로그인 완료 후 자동으로 쿠키 저장 (twitter_cookies.pkl)
+3. 다음 실행부터는 자동 로그인됨
+```
+
+> 💡 **참고**: 환경변수에 Twitter 계정 정보는 필요하지 않습니다. 쿠키 파일로 세션을 유지합니다.
+
 ---
 
 #### 2-2. YouTube 데이터 수집
@@ -256,15 +267,32 @@ uv sync
 - `pandas`: 데이터 처리
 - `sentence-transformers`: SBERT 임베딩
 - `undetected-chromedriver`: 웹 크롤링
+- `python-dotenv`: 환경변수 관리
 - `kiwipiepy`: 한국어 형태소 분석
 
-### 2. 환경 변수 설정
+### 2. 환경 변수 설정 (필수!)
 
-`.env` 파일에 Gemini API 키 추가:
+프로젝트 루트에 `.env` 파일을 생성하고 Gemini API 키를 추가하세요:
+
+```bash
+# .env 파일 생성
+touch .env
+```
+
+`.env` 파일 내용:
 
 ```
 GEMINI_API_KEY=your_api_key_here
 ```
+
+**Gemini API 키 발급 방법**:
+
+1. [Google AI Studio](https://aistudio.google.com/) 접속
+2. 로그인 후 "Get API Key" 클릭
+3. 새 API 키 생성
+4. `.env` 파일에 복사/붙여넣기
+
+> ⚠️ **중요**: `.env` 파일은 절대 Git에 커밋하지 마세요! (`.gitignore`에 포함됨)
 
 ### 3. Chrome 브라우저
 
