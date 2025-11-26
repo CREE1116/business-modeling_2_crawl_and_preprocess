@@ -2,6 +2,7 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 import pandas as pd
 import time
 import random
@@ -14,7 +15,7 @@ from datetime import datetime
 # ==========================================
 # [설정] 수집 옵션 (여기를 수정하세요)
 # ==========================================
-CSV_FILE_PATH = "gemini_trend_keywords_20251124_1623.csv" 
+CSV_FILE_PATH = "gemini_trend_keywords_20251126_1037.csv" 
 COOKIE_FILE = "twitter_cookies.pkl"
 
 TWEETS_PER_QUERY_GROUP = 300  # 쿼리 세트 당 수집 목표
@@ -285,7 +286,7 @@ def parse_number(text):
         return int(nums[0]) if nums else 0
     except: return 0
 
-def parse_tweet(article):
+def parse_tweet(driver, article):
     try:
         text_elem = article.find_element(By.CSS_SELECTOR, 'div[data-testid="tweetText"]')
         text = text_elem.text
@@ -312,13 +313,24 @@ def parse_tweet(article):
             metrics['view'] = parse_number(link.get_attribute("aria-label"))
         except: pass
 
+        # [수정] 팔로워 수 대신 작성자 ID(핸들) 수집
+        author_id = "unknown"
+        try:
+            user_link = article.find_element(By.CSS_SELECTOR, 'div[data-testid="User-Name"] a')
+            href = user_link.get_attribute("href")
+            if href:
+                # https://twitter.com/username -> @username
+                author_id = "@" + href.split('/')[-1]
+        except: pass
+
         return {
             'text': text,
             'created_at': dt,
             'reply': metrics['reply'],
             'retweet': metrics['retweet'],
             'like': metrics['like'],
-            'view': metrics['view']
+            'view': metrics['view'],
+            'author_id': author_id  # [변경] follower_count -> author_id
         }
     except: return None
 
@@ -366,7 +378,9 @@ def perform_search_and_collect(driver, query_string, group_keywords, limit):
             for art in articles:
                 if len(collected) >= limit: break
                 
-                data = parse_tweet(art)
+                # [수정] driver 전달
+                data = parse_tweet(driver, art)
+                
                 # 파이썬 내부 필터링 + 리트윗 수 더블 체크 (선택사항)
                 if data and is_clean_content(data['text']):
                     # 검색 결과가 정확하다면 여기서 min_retweets가 적용된 글만 보여야 함
@@ -430,7 +444,8 @@ def main():
         print(f"🚀 트위터 수집 시작 (Min Retweets: {MIN_RETWEETS}, 3글자 미만 분할 금지)")
         print("="*60)
         
-        columns = ['text', 'reply', 'retweet', 'like', 'view', 'created_at', 'search_keyword', 'search_query']
+        # [수정] follower_count -> author_id
+        columns = ['text', 'reply', 'retweet', 'like', 'view', 'author_id', 'created_at', 'search_keyword', 'search_query']
         
         for idx, (q_str, k_list) in enumerate(query_groups, 1):
             print(f"\n[Group {idx}/{len(query_groups)}] 시작")
@@ -441,7 +456,7 @@ def main():
                 df = pd.DataFrame(data)
                 for col in columns:
                     if col not in df.columns:
-                        df[col] = 0 if col in ['reply','retweet','like','view'] else ""
+                        df[col] = 0 if col in ['reply','retweet','like','view'] else ("" if col == 'author_id' else "")
                 df = df[columns]
                 
                 header = not os.path.exists(filename)

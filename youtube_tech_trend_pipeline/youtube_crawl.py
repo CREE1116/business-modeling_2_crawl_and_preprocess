@@ -9,12 +9,13 @@ import random
 import os
 from datetime import datetime
 from itertools import combinations
+import re
 
 # ==========================================
 # [설정] 파일 입력 및 수집 설정
 # ==========================================
 # [중요] 1번 스크립트에서 만든 파일명을 여기에 입력하세요
-INPUT_KEYWORD_FILE = "/Users/leejongmin/code/비모/gemini_trend_keywords_20251124_1338.csv"  # <-- 파일명 수정 필요
+INPUT_KEYWORD_FILE = "/Users/leejongmin/code/비모/gemini_trend_keywords_20251126_1037.csv"  # <-- 파일명 수정 필요
 
 VIDEOS_PER_KEYWORD = 10      # 키워드당 수집할 영상 수
 COMMENTS_PER_VIDEO = 100     # 영상당 수집할 댓글 수
@@ -52,6 +53,30 @@ def combine_keywords(keywords, combination_size=2, max_combinations=50):
     random.shuffle(combined_keywords)
     return combined_keywords
 
+def parse_number_k(text):
+    """
+    '1.2만회', '500K', '1.5M', '70,454회' 등을 숫자로 변환
+    """
+    if not text: return 0
+    text = text.replace(',', '').replace('회', '').replace('views', '').replace('subscribers', '').replace('구독자', '').replace('명', '').strip()
+    try:
+        if '만' in text:
+            return int(float(text.replace('만', '')) * 10000)
+        if '억' in text:
+            return int(float(text.replace('억', '')) * 100000000)
+        if 'K' in text or '천' in text: # 영문 K or 한글 천
+             return int(float(text.replace('K', '').replace('천', '')) * 1000)
+        if 'M' in text or '백만' in text:
+            return int(float(text.replace('M', '').replace('백만', '')) * 1000000)
+        
+        # 숫자만 남기기
+        nums = re.findall(r'[\d\.]+', text)
+        if nums:
+            return int(float(nums[0]))
+        return 0
+    except:
+        return 0
+
 # ==========================================
 # 유튜브 크롤링 함수들
 # ==========================================
@@ -60,7 +85,13 @@ def get_video_links(driver, keyword, limit=3):
     try:
         # sp=CAMSAhAB: 조회수 순 정렬 (논쟁 많은 영상 타겟팅)
         search_url = f"https://www.youtube.com/results?search_query={keyword}&sp=CAMSAhAB"
-        driver.get(search_url)
+        
+        try:
+            driver.get(search_url)
+        except Exception as e:
+            print(f"   [Warning] 검색 페이지 로드 실패 (Timeout 등): {e}")
+            return []
+            
         random_sleep(3, 5)
         
         links = []
@@ -94,54 +125,138 @@ def get_video_description(driver):
     except: return ""
 
 def get_video_metadata(driver):
-    """영상 게시일과 좋아요 수 수집"""
+    """영상 게시일, 좋아요 수, 조회수, 구독자 수 수집"""
     metadata = {
         'video_published_date': None,
-        'video_likes': None
+        'video_likes': 0,
+        'video_views': 0,
+        'channel_subscribers': 0
     }
     
+    # [Wait] 메타데이터가 로드될 때까지 잠시 대기 (최대 5초)
     try:
-        # 영상 게시일 수집
-        info_strings = driver.find_elements(By.CSS_SELECTOR, "#info-strings yt-formatted-string")
-        for info in info_strings:
-            text = info.text.strip()
-            if text:
-                metadata['video_published_date'] = text
-                break
-    except:
-        pass
-    
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "#info span, #info-strings yt-formatted-string"))
+        )
+    except: pass
+
+    # 1. 영상 게시일 & 조회수 (UI Scraping + Retry)
+    for attempt in range(3):
+        try:
+            info_elements = driver.find_elements(By.CSS_SELECTOR, "#info span, yt-formatted-string#info span, #info-text span")
+            for span in info_elements:
+                text = span.text.strip()
+                if not text: continue
+                
+                if ("조회수" in text or "views" in text) and metadata['video_views'] == 0:
+                    metadata['video_views'] = parse_number_k(text)
+                elif ("전" in text or "ago" in text or "202" in text) and not metadata['video_published_date']:
+                    if "스트리밍" in text: continue 
+                    metadata['video_published_date'] = text
+            
+            if metadata['video_views'] > 0: break
+            time.sleep(1.5)
+        except: 
+            time.sleep(1)
+            pass
+
+    # [Fallback] 조회수가 여전히 0이면 소스 코드에서 Regex로 추출 (가장 강력한 방법)
+    if metadata['video_views'] == 0:
+        try:
+            page_source = driver.page_source
+            # 패턴 1: "viewCount":"12345"
+            match1 = re.search(r'"viewCount":"(\d+)"', page_source)
+            if match1:
+                metadata['video_views'] = int(match1.group(1))
+            else:
+                # 패턴 2: "originalViewCount":"12345"
+                match2 = re.search(r'"originalViewCount":"(\d+)"', page_source)
+                if match2:
+                    metadata['video_views'] = int(match2.group(1))
+                else:
+                    # 패턴 3: "viewCount":{"simpleText":"조회수 1.2만회"}
+                    match3 = re.search(r'"viewCount":\{"simpleText":"(.*?)"\}', page_source)
+                    if match3:
+                        metadata['video_views'] = parse_number_k(match3.group(1))
+        except: pass
+
+    # 2. 좋아요 수
     try:
-        # 좋아요 수 수집 (여러 셀렉터 시도)
         like_selectors = [
+            ".yt-spec-button-shape-next__button-text-content",
             "like-button-view-model button",
             "button[aria-label*='좋아요']",
             "yt-button-shape button[aria-label*='좋아요']",
-            "#segmented-like-button button",
-            "ytd-toggle-button-renderer button"
+            "#segmented-like-button button"
         ]
-        
         for selector in like_selectors:
             try:
-                like_button = driver.find_element(By.CSS_SELECTOR, selector)
-                aria_label = like_button.get_attribute("aria-label")
-                if aria_label and ('좋아요' in aria_label or 'like' in aria_label.lower()):
-                    metadata['video_likes'] = aria_label
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                for elem in elements:
+                    text = elem.text.strip()
+                    if text and (text.isdigit() or '천' in text or '만' in text or 'K' in text or 'M' in text):
+                         val = parse_number_k(text)
+                         if val > 0:
+                             metadata['video_likes'] = val
+                             break
+                    aria_label = elem.get_attribute("aria-label")
+                    if aria_label and ('좋아요' in aria_label or 'like' in aria_label.lower()):
+                        val = parse_number_k(aria_label)
+                        if val > 0:
+                            metadata['video_likes'] = val
+                            break
+                if metadata['video_likes'] > 0: break
+            except: continue
+    except: pass
+
+    # 3. 조회수 (Views) - Fallback (Specific Renderers)
+    if metadata['video_views'] == 0:
+        try:
+            view_selectors = [
+                "ytd-video-view-count-renderer span.view-count",
+                "#info-container yt-formatted-string span:nth-child(1)", 
+                "ytd-watch-metadata #description-inner #info span"
+            ]
+            for selector in view_selectors:
+                try:
+                    view_elem = driver.find_element(By.CSS_SELECTOR, selector)
+                    text = view_elem.text
+                    if "조회수" in text or "views" in text:
+                        metadata['video_views'] = parse_number_k(text)
+                        break
+                except: continue
+        except: pass
+
+    # 4. 구독자 수 (Subscribers)
+    try:
+        sub_selectors = [
+            "#owner-sub-count",
+            "yt-formatted-string#owner-sub-count"
+        ]
+        for selector in sub_selectors:
+            try:
+                sub_elem = driver.find_element(By.CSS_SELECTOR, selector)
+                text = sub_elem.text # "구독자 100만명"
+                if text:
+                    metadata['channel_subscribers'] = parse_number_k(text)
                     break
-            except:
-                continue
-    except:
-        pass
+            except: continue
+    except: pass
     
     return metadata
 
 def get_comments_from_video(driver, title, url, limit=30):
     print(f"   [Mining] {title[:20]}...")
-    driver.get(url)
-    random_sleep(2, 3)
+    try:
+        driver.get(url)
+    except Exception as e:
+        print(f"   [Warning] 영상 페이지 로드 실패 (Timeout 등): {e}")
+        return []
+        
+    random_sleep(3, 5) # [Wait] Increased wait time for metadata loading
     collected = []
     
-    # 0. 영상 메타데이터 수집 (게시일, 좋아요)
+    # 0. 영상 메타데이터 수집 (게시일, 좋아요, 조회수, 구독자)
     video_metadata = get_video_metadata(driver)
     
     # 1. 설명글 수집 (Word2Vec 학습에 매우 중요)
@@ -155,6 +270,8 @@ def get_comments_from_video(driver, title, url, limit=30):
             "type": "description",
             "video_published_date": video_metadata['video_published_date'],
             "video_likes": video_metadata['video_likes'],
+            "video_views": video_metadata['video_views'],
+            "channel_subscribers": video_metadata['channel_subscribers'],
             "comment_date": None,  # 설명글은 날짜 없음
             "crawled_at": datetime.now().strftime("%Y-%m-%d")
         })
@@ -199,6 +316,8 @@ def get_comments_from_video(driver, title, url, limit=30):
                     "type": "comment",
                     "video_published_date": video_metadata['video_published_date'],
                     "video_likes": video_metadata['video_likes'],
+                    "video_views": video_metadata['video_views'],
+                    "channel_subscribers": video_metadata['channel_subscribers'],
                     "comment_date": comment_date,
                     "crawled_at": datetime.now().strftime("%Y-%m-%d")
                 })
@@ -266,8 +385,12 @@ def main():
     options = uc.ChromeOptions()
     options.add_argument('--no-first-run')
     options.add_argument("--mute-audio")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     
     driver = uc.Chrome(options=options)
+    driver.set_page_load_timeout(30)  # 30초 이상 로딩되면 Timeout 에러 발생 (무한 대기 방지)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
     final_filename = f"final_dataset_youtube_{timestamp}.csv"

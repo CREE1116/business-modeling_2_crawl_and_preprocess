@@ -208,6 +208,8 @@ def extract_keywords_with_gemini(docs):
     - 소프트웨어/플랫폼 (앱, 서비스, 프레임워크 등)
     - 신기술/미래기술 (양자컴퓨팅, AR/VR, 메타버스 등)
     - 데이터/클라우드 기술
+    - IoT 기술
+    - 컴퓨터, 개발 관련 기술들
 
     [조건]
     1. 추상적인 단어(상승, 전망, 폭락, 특징주, 마감, 코스피)는 절대 제외하세요.
@@ -228,12 +230,11 @@ def extract_keywords_with_gemini(docs):
 
     [출력 형식]
     반드시 아래 CSV 형식으로만 출력하세요. (헤더 포함, keyword 안에는 쉼표를 넣지 마세요)
-    category는 AI, 로봇, 반도체, 소프트웨어, 데이터, 클라우드만 사용하세요.
 
-    keyword,category
-    ChatGPT 성능 향상,AI
-    휴머노이드 로봇 기술,로봇
-    HBM 메모리 기술,반도체
+    keyword
+    ChatGPT 성능 향상,
+    휴머노이드 로봇 기술,
+    HBM 메모리 기술,
     """
     
     print("   -> Gemini에게 분석 요청 중... (약 5~10초 소요)")

@@ -19,6 +19,7 @@ graph TD
     H --> J[YouTube 필터링<br/>youtube_tech_filter.py]
     I --> K[최종 데이터셋]
     J --> K
+    K --> L[5. 인플루언서 분석<br/>twitter_follower_crawler.py]
 ```
 
 ---
@@ -82,10 +83,11 @@ TWEETS_PER_QUERY_GROUP = 300  # 키워드당 수집 목표
 **출력**:
 
 - `data/twitter/twitter_retweet_filtered_YYYYMMDD_HHMM.csv`
-- 컬럼: `text`, `reply`, `retweet`, `like`, `view`, `created_at`, `search_keyword`, `search_query`
+- 컬럼: `text`, `reply`, `retweet`, `like`, `view`, `author_id`, `created_at`, `search_keyword`, `search_query`
 
 **주요 특징**:
 
+- **Author ID 수집**: 팔로워 수 대신 `@username`을 수집하여 추후 일괄 조회 (속도 향상)
 - 키워드별 독립 검색 (OR 조합으로 검색 범위 확대)
 - 날짜 기반 필터링 (`since`, `until`)
 - 최소 리트윗 수 필터링 (품질 관리)
@@ -130,7 +132,12 @@ COMMENTS_PER_VIDEO = 20   # 영상당 댓글 수
 **출력**:
 
 - `data/youtube/final_dataset_youtube_YYYYMMDD_HHMM.csv`
-- 컬럼: `video_title`, `video_url`, `video_likes`, `comment_text`, `comment_likes`, `search_keyword`
+- 컬럼: `video_title`, `video_url`, `video_likes`, `video_views`, `channel_subscribers`, `comment_text`, `comment_likes`, `search_keyword`
+
+**주요 특징**:
+
+- **메트릭 수집**: 조회수, 구독자 수, 좋아요 수 수집 (K/M 단위 자동 변환)
+- **안정성 강화**: 조회수 로딩 지연 시 재시도 및 소스 코드 직접 파싱 (Regex Fallback)
 
 ---
 
@@ -238,6 +245,29 @@ SIMILARITY_THRESHOLD = 0.3
 
 ---
 
+### Step 5: 인플루언서 분석 (New!)
+
+**파일**: `youtube_tech_trend_pipeline/twitter_follower_crawler.py`
+
+수집된 트윗 작성자들의 팔로워 수를 별도로 수집하여 영향력을 분석합니다.
+
+```bash
+uv run python youtube_tech_trend_pipeline/twitter_follower_crawler.py
+```
+
+**동작**:
+
+1. 가장 최신 `twitter_retweet_filtered_*.csv` 파일을 자동으로 찾습니다.
+2. 중복되지 않은 유저 ID(`author_id`)를 추출합니다.
+3. 각 유저의 프로필을 방문하여 팔로워 수를 수집합니다.
+
+**출력**:
+
+- `twitter_user_metrics_YYYYMMDD_HHMM.csv`
+- 컬럼: `author_id`, `follower_count`, `crawled_at`
+
+---
+
 ## 📊 최종 데이터셋
 
 ### Twitter 최종 데이터
@@ -333,8 +363,9 @@ Twitter/YouTube 크롤러 실행 시 Chrome 브라우저가 필요합니다.
 비모/
 ├── youtube_tech_trend_pipeline/    # 1단계: 키워드 생성 & 수집
 │   ├── gemini_to_topic.py         # 키워드 생성
-│   ├── twitter_crawler.py         # Twitter 크롤러
-│   └── youtube_crawl.py           # YouTube 크롤러
+│   ├── twitter_crawler.py         # Twitter 크롤러 (Author ID 수집)
+│   ├── twitter_follower_crawler.py # Twitter 팔로워 수집 (New!)
+│   └── youtube_crawl.py           # YouTube 크롤러 (Metrics 수집)
 ├── data_processing/                # 3-4단계: 통합 & 필터링
 │   ├── merge_twitter_data.py      # Twitter 머지
 │   ├── merge_youtube_data.py      # YouTube 머지
