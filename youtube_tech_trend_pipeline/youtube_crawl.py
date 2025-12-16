@@ -15,7 +15,7 @@ import re
 # [설정] 파일 입력 및 수집 설정
 # ==========================================
 # [중요] 1번 스크립트에서 만든 파일명을 여기에 입력하세요
-INPUT_KEYWORD_FILE = "/Users/leejongmin/code/비모/gemini_trend_keywords_20251126_1037.csv"  # <-- 파일명 수정 필요
+INPUT_KEYWORD_FILE = "gemini_trend_keywords_20251129_1301.csv"  # <-- 파일명 수정 필요
 
 VIDEOS_PER_KEYWORD = 10      # 키워드당 수집할 영상 수
 COMMENTS_PER_VIDEO = 100     # 영상당 수집할 댓글 수
@@ -393,7 +393,9 @@ def main():
     driver.set_page_load_timeout(30)  # 30초 이상 로딩되면 Timeout 에러 발생 (무한 대기 방지)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-    final_filename = f"final_dataset_youtube_{timestamp}.csv"
+    output_dir = "data/youtube"
+    os.makedirs(output_dir, exist_ok=True)
+    final_filename = os.path.join(output_dir, f"final_dataset_youtube_{timestamp}.csv")
     total_count = 0
 
     print("="*60)

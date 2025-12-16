@@ -15,17 +15,17 @@ from datetime import datetime
 # ==========================================
 # [설정] 수집 옵션 (여기를 수정하세요)
 # ==========================================
-CSV_FILE_PATH = "gemini_trend_keywords_20251126_1037.csv" 
+CSV_FILE_PATH = "gemini_trend_keywords_20251211_2350.csv" 
 COOKIE_FILE = "twitter_cookies.pkl"
 
-TWEETS_PER_QUERY_GROUP = 300  # 쿼리 세트 당 수집 목표
+TWEETS_PER_QUERY_GROUP = 200  # 쿼리 세트 당 수집 목표
 SEARCH_MODE = "live"          # live: 최신순 (양 확보용), top: 인기순
 LANG_FILTER = "lang:ko"       
 
 # [1] 리트윗 컷오프 설정 (1차 필터링)
 # 트윗이 검색될 때 최소 이 숫자 이상의 리트윗이 있어야만 나옵니다.
 # 0이면 모든 글, 5~10 정도면 적당한 퀄리티, 50 이상이면 네임드 글만 나옴.
-MIN_RETWEETS = 10
+MIN_RETWEETS = 1
 
 # [2] 날짜 범위 설정
 # 최근 며칠 동안의 트윗만 검색 (예: 7 = 최근 7일, 30 = 최근 1개월)
@@ -135,10 +135,10 @@ political_hate = [
 
 # 전체 필터링 단어 통합
 all_spam_keywords = (
-    anime_otaku + idol_celeb + sports + 
-    loan_finance + gambling + adult_content +
-    shopping_spam + scam_phishing + crypto_scam +
-    political_hate
+    # anime_otaku + idol_celeb + sports + 
+    # loan_finance + gambling + adult_content +
+    # shopping_spam + scam_phishing + crypto_scam +
+    # political_hate
 )
 
 # 중복 제거
@@ -146,18 +146,7 @@ ALL_NOISE_KEYWORDS = list(set(all_spam_keywords))
 
 # [입구 컷] 쿼리에 직접 넣을 제외어 (독립 검색이므로 강하게 설정 가능)
 QUERY_EXCLUDE_KEYWORDS = [
-    # 아이돌/팬덤 (최우선)
-    "아이돌", "포카", "양도", "나눔", "rt", "알티", "직캠", "팬싸", 
-    "콘서트", "굿즈", "앨범", "컴백", "최애", "덕질",
-    
-    # 스포츠
-    "야구", "축구", "KBO", "경기", "선수",
-    
-    # 금융/도박
-    "토토", "대출", "급전", "배팅", "카지노",
-    
-    # 성인/쇼핑
-    "19금", "쿠팡", "알리", "할인", "쿠폰"
+
 ]
 
 # ==========================================
@@ -166,10 +155,37 @@ QUERY_EXCLUDE_KEYWORDS = [
 def random_sleep(min_t=2.0, max_t=4.0):
     time.sleep(random.uniform(min_t, max_t))
 
-def human_like_scroll(driver):
-    scroll_amount = random.randint(700, 1000)
-    driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-    time.sleep(random.uniform(2.0, 3.5))
+# ==========================================
+# [수정] 스크롤 로직 개선 (요요 스크롤 적용)
+# ==========================================
+def smart_scroll(driver, last_height, stuck_count):
+    """
+    단순 스크롤이 아니라, 바닥을 찍고 살짝 올렸다가 다시 내리는 
+    '요요 동작'을 통해 트위터의 데이터 로딩을 강제로 트리거함
+    """
+    try:
+        # 1. 현재 높이에서 화면 절반 정도 내림 (자연스럽게)
+        driver.execute_script("window.scrollBy(0, window.innerHeight * 0.8);")
+        time.sleep(random.uniform(1.0, 1.5))
+
+        # 2. 바닥까지 확 내림
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(random.uniform(2.0, 3.0))
+
+        # 3. [핵심] 만약 높이 변화가 없어서 'stuck' 상태라면? -> 충격 요법
+        if stuck_count > 0:
+            # 3-1. 위로 살짝 올림 (로딩 트리거)
+            driver.execute_script("window.scrollBy(0, -500);")
+            time.sleep(random.uniform(1.0, 1.5))
+            
+            # 3-2. 다시 바닥으로 내림
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(random.uniform(2.0, 3.0))
+            
+        return True
+    except Exception as e:
+        print(f"   [Scroll Error] {e}")
+        return False
 
 def load_cookies(driver, filename):
     if not os.path.exists(filename): return False
@@ -197,67 +213,70 @@ def wait_for_login(driver):
 # ==========================================
 # 2. 키워드 확장 및 쿼리 생성 (수정됨)
 # ==========================================
-def expand_keyword(text):
-    """
-    키워드 내부 OR 조합 생성 (첫 단어만, 큰따옴표로 감싸기)
-    "DevOps 문화" → ("DevOps 문화" OR "DevOps")
-    "DDD 아키텍처" → ("DDD 아키텍처" OR "DDD")  # 사람 이름 방지
-    """
-    text = str(text).strip()
-    
-    # 1. 원본 전체
-    expanded = [f'"{text}"']
-    
-    # 2. 첫 번째 단어만 추가 (큰따옴표로 감싸서 정확한 매칭)
-    tokens = text.split()
-    if len(tokens) > 1 and len(tokens[0]) >= 2:
-        expanded.append(f'"{tokens[0]}"')
-            
-    return expanded
+def clean_keyword(text):
+    """특수문자 제거 및 정제"""
+    return re.sub(r'[^\w\s]', '', str(text)).strip()
 
-def generate_queries(csv_path, max_query_length=600):
+def build_smart_query(keyword):
     """
-    각 키워드를 독립 쿼리로 생성하되, 키워드 내부에서 OR 조합 사용
+    키워드 길이에 따라 검색 전략을 다르게 가져감
     """
+    keyword = clean_keyword(keyword)
+    tokens = keyword.split()
+    
+    # Case 1: 1단어짜리 (예: "Python", "서버")
+    # -> 기존처럼 확장하거나 그대로 둠
+    if len(tokens) == 1:
+        return f'"{keyword}"'  # 1단어는 정확도를 위해 따옴표 추천
+        
+    # Case 2: 2단어 이상 (예: "생성형 AI 모델", "리액트 상태 관리")
+    # -> 따옴표를 쓰면 결과가 0이 나오므로, 따옴표 없이 AND 조건으로 묶음
+    # -> 트위터에서 (A B) 라고 쓰면 (A AND B)로 동작함
+    else:
+        # 전략: "정확한 구문" OR (단어 AND 단어)
+        # 예: "생성형 AI" OR (생성형 AI)
+        loose_match = f"{' '.join(tokens)}" # 따옴표 없는 버전
+        
+        # 두 가지 경우를 다 찾되, loose_match가 더 많은 결과를 가져옴
+        return f"{loose_match}"
+
+def generate_queries(csv_path, max_query_length=500):
     print("\n" + "="*60)
-    print("📂 [Step 1] 키워드 로드 및 쿼리 생성")
+    print("📂 [Step 1] 지능형 쿼리 생성 (Long-tail 키워드 구출 작전)")
     print("="*60)
     
     if not os.path.exists(csv_path): return []
 
     try:
         df = pd.read_csv(csv_path)
+        # 컬럼명 찾기 (keyword가 포함된 컬럼)
         col = [c for c in df.columns if 'keyword' in c.lower()][0]
         raw_keywords = df[col].dropna().unique().tolist()
         random.shuffle(raw_keywords)
         
         query_groups = []
         
-        # 각 키워드를 독립 쿼리로 생성
         for keyword in raw_keywords:
-            # 키워드 내부 OR 조합
-            expanded = expand_keyword(keyword)
-            or_clause = " OR ".join(expanded)
+            # [핵심] 스마트 쿼리 빌더 사용
+            core_query = build_smart_query(keyword)
             
             # 날짜 범위 계산
             from datetime import datetime, timedelta
             end_date = datetime.now()
             start_date = end_date - timedelta(days=SEARCH_DAYS)
             
-            # 쿼리 조립 (날짜 필터 포함)
+            # 쿼리 조립
             parts = [
-                f"({or_clause})", 
-                LANG_FILTER, 
-                "-filter:retweets", 
-                f"min_retweets:{MIN_RETWEETS}",
-                f"since:{start_date.strftime('%Y-%m-%d')}",
-                f"until:{end_date.strftime('%Y-%m-%d')}"
+                core_query,  # ("생성형 AI" OR (생성형 AI)) 형태
+                # LANG_FILTER, 
+                # "-filter:retweets", 
+                # f"min_retweets:{MIN_RETWEETS}",
+                # 제외어는 가장 핵심적인 것 5개만 (쿼리 길이 절약)
+                # "-양도 -나눔 -포카 -토토 -대출", 
+                # f"since:{start_date.strftime('%Y-%m-%d')}",
+                # f"until:{end_date.strftime('%Y-%m-%d')}"
             ]
-            
-            # 노이즈 키워드 추가
-            for noise in QUERY_EXCLUDE_KEYWORDS:
-                parts.append(f"-{noise}")
-            
+        
             full_query_string = " ".join(parts)
             
             # 길이 체크
@@ -267,12 +286,12 @@ def generate_queries(csv_path, max_query_length=600):
                 
             query_groups.append((full_query_string, [keyword]))
             
-        print(f"   -> 총 {len(query_groups)}개 독립 쿼리 생성 (각 키워드 내 OR 조합 포함)")
+        print(f"   -> 총 {len(query_groups)}개 스마트 쿼리 생성")
         return query_groups
+        
     except Exception as e:
         print(f"Error: {e}")
         return []
-
 # ==========================================
 # 3. 데이터 파싱
 # ==========================================
@@ -363,48 +382,132 @@ def perform_search_and_collect(driver, query_string, group_keywords, limit):
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'article[data-testid="tweet"]'))
             )
         except: 
+            # [추가] 리미트 감지
+            page_source = driver.page_source
+            if "요청 한도를 초과했습니다" in page_source or "Rate limit exceeded" in page_source:
+                print("\n" + "="*60)
+                print("🚨 [CRITICAL] 트위터 요청 한도 초과 (Rate Limit Exceeded)")
+                print("   -> 15분간 대기 후 재시도합니다... (커피 한 잔 하고 오세요 ☕️)")
+                print("="*60)
+                time.sleep(900) # 15분 대기
+                return [] # 이번 쿼리는 건너뛰거나, 재시도 로직을 상위에 구현해야 함 (일단은 스킵)
+            
             print("   -> ❌ 검색 결과 없음.")
+            # print(f"   -> [Debug] Current URL: {driver.current_url}")
+            # driver.save_screenshot("debug_search_fail.png")
             return []
             
         collected = []
         seen_texts = set()
         last_height = driver.execute_script("return document.body.scrollHeight")
         stuck = 0
+        consecutive_retries = 0  # [추가] 연속 재시도 횟수 제한
         
         while len(collected) < limit:
             articles = driver.find_elements(By.CSS_SELECTOR, 'article[data-testid="tweet"]')
             found_new = False
+            
+            # [Debug] 필터링 통계
+            scanned_count = 0
+            filtered_noise = 0
+            filtered_seen = 0
             
             for art in articles:
                 if len(collected) >= limit: break
                 
                 # [수정] driver 전달
                 data = parse_tweet(driver, art)
+                scanned_count += 1
                 
-                # 파이썬 내부 필터링 + 리트윗 수 더블 체크 (선택사항)
-                if data and is_clean_content(data['text']):
-                    # 검색 결과가 정확하다면 여기서 min_retweets가 적용된 글만 보여야 함
-                    sig = data['text'][:50]
-                    if sig not in seen_texts:
-                        seen_texts.add(sig)
-                        data['search_keyword'] = detect_keyword_in_text(data['text'], group_keywords)
-                        data['search_query'] = query_string 
-                        collected.append(data)
-                        found_new = True
+                if not data: continue
+                
+                # 1. 노이즈 필터링 체크
+                if not is_clean_content(data['text']):
+                    filtered_noise += 1
+                    # print(f"      [Noise Filtered] {data['text'][:30]}...") # 너무 시끄러우면 주석 처리
+                    continue
+                    
+                # 2. 중복 체크
+                sig = data['text'][:50]
+                if sig in seen_texts:
+                    filtered_seen += 1
+                    continue
+                    
+                seen_texts.add(sig)
+                data['search_keyword'] = detect_keyword_in_text(data['text'], group_keywords)
+                data['search_query'] = query_string 
+                collected.append(data)
+                found_new = True
+            
+            # [Debug] 이번 스크롤 결과 출력
+            if scanned_count > 0:
+                print(f"      -> 스캔: {scanned_count}개 | 수집: {found_new} | 노이즈: {filtered_noise} | 중복: {filtered_seen}")
             
             if len(collected) >= limit: break
             
-            human_like_scroll(driver)
+            # ... (데이터 수집 코드 바로 뒤) ...
+
+            # 1. 스마트 스크롤 실행 (stuck 상태 전달)
+            smart_scroll(driver, last_height, stuck)
+            
+            # 2. 높이 체크
             new_height = driver.execute_script("return document.body.scrollHeight")
             
+            # 3. 멈춤 판별 로직 강화
             if new_height == last_height:
                 stuck += 1
-                if stuck > 4: 
-                    print("   -> ⚠️ 스크롤 끝 도달")
+                print(f"      [Stuck {stuck}/7] 로딩 대기 중...")
+                
+                # [수정] 막히면 즉시 '다시 시도' 버튼 찾기 시도 (단, 연속 3회까지만)
+                # [수정] 막히면 즉시 '다시 시도' 버튼 찾기 시도
+                if consecutive_retries < 3:
+                    try:
+                        retry_selectors = [
+                            "//span[text()='다시 시도']",
+                            "//span[contains(text(), 'Retry')]",
+                            "//div[@role='button']//span[contains(text(), '다시 시도')]",
+                            "//span[contains(text(), '다시 시도하세요')]" # [추가] 정확한 문구
+                        ]
+                        
+                        clicked_retry = False
+                        for sel in retry_selectors:
+                            try:
+                                retry_btn = driver.find_element(By.XPATH, sel)
+                                driver.execute_script("arguments[0].click();", retry_btn)
+                                print(f"      -> 🔄 '다시 시도' 버튼 클릭 성공 ({sel})")
+                                stuck = 0 # 성공 시 리셋
+                                consecutive_retries += 1 # 재시도 횟수 증가
+                                clicked_retry = True
+                                time.sleep(random.uniform(3.0, 5.0)) # [수정] 대기 시간 약간 증가
+                                break
+                            except: continue
+                        
+                        if clicked_retry:
+                            continue # 재시도 했으면 스크롤 체크 건너뛰고 다시 스캔
+                    except: pass
+                
+                # [추가] 3회 이상 연속 재시도 실패 시 -> 페이지 새로고침 (Soft Refresh)
+                elif consecutive_retries >= 3:
+                    print("      -> ⚠️ 연속 재시도 실패. 페이지 새로고침 시도...")
+                    driver.refresh()
+                    time.sleep(random.uniform(5.0, 8.0))
+                    stuck = 0
+                    consecutive_retries = 0
+                    continue
+                
+                else:
+                    print("      -> ⚠️ 재시도 한도 초과 (무한 루프 방지)")
+                
+                # 7번 이상 막히면 포기 (다음 키워드로)
+                if stuck > 7: 
+                    print("   -> ⚠️ 스크롤 끝 도달 (더 이상 데이터 없음)")
                     break
             else:
                 stuck = 0
+                consecutive_retries = 0 # 높이가 변했으면 재시도 카운트 초기화
                 last_height = new_height
+                
+            # ... (진행률 표시 코드) ...
                 
             if len(collected) % 50 == 0 and found_new:
                 print(f"      [{len(collected)}/{limit}] 수집 중...")
@@ -437,7 +540,10 @@ def main():
             if not wait_for_login(driver): return
             
         timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        filename = f"twitter_retweet_filtered_{timestamp}.csv"
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+        output_dir = "data/twitter"
+        os.makedirs(output_dir, exist_ok=True)
+        filename = os.path.join(output_dir, f"twitter_retweet_filtered_{timestamp}.csv")
         total = 0
         
         print("="*60)
